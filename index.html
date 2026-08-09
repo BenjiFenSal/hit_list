@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Benji's Hit List</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1b1f27">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="styles.css">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+
+<header class="app-header">
+  <h1>Benji's Hit List</h1>
+  <div class="header-actions">
+    <div class="header-tabs">
+      <button class="tab-btn active" data-view="board" data-tip="Active tasks grouped by priority quadrant">Board</button>
+      <button class="tab-btn" data-view="today" data-tip="Just what's due today, completed items struck through">Today</button>
+      <button class="tab-btn" data-view="yesterday" data-tip="What was due yesterday, so nothing slips through unnoticed">Yesterday</button>
+      <button class="tab-btn" data-view="list" data-tip="Every task in one filterable table, active and done">List</button>
+      <button class="tab-btn" data-view="analytics" data-tip="Task metrics by day, week, month, or a custom range">Analytics</button>
+      <button class="tab-btn" data-view="projects" data-tip="Manage your project tags">Projects</button>
+      <button class="tab-btn" data-view="archive" data-tip="Completed tasks you can restore">Archive</button>
+    </div>
+    <button type="button" id="sync-btn" class="theme-toggle" data-tip="Sign in with Google and sync with your Sheet" aria-label="Sync with Google Sheets">🔄</button>
+    <button type="button" id="theme-toggle" class="theme-toggle" data-tip="Toggle light / dark theme" aria-label="Toggle light or dark theme">🌙</button>
+  </div>
+</header>
+
+<div id="sync-status" class="sync-status" hidden></div>
+
+<div id="overdue-banner" class="overdue-banner" hidden role="button" tabindex="0"></div>
+
+<form id="quick-add" class="quick-add" autocomplete="off">
+  <div class="quick-add-row">
+    <input type="text" id="qa-title" placeholder="What needs doing?" required>
+  </div>
+  <div class="quick-add-row">
+    <textarea id="qa-description" class="qa-description" rows="2" placeholder="Add details or considerations (optional)" data-tip="Longer notes or context for this task — saved as its Comment"></textarea>
+  </div>
+  <div class="quick-add-row qa-project-row">
+    <input type="text" id="qa-project" list="project-suggestions" placeholder="Project (optional) — type &amp; Enter, or pick recent" data-tip="Tag this task to a project. Type a name and press Enter, or click a recent project">
+    <div class="qa-recent-projects" id="qa-recent-projects"></div>
+  </div>
+  <div class="quick-add-row">
+    <div class="category-picker" id="qa-category-picker" role="group" aria-label="Category"></div>
+    <button type="button" id="qa-quick-toggle" class="quick-toggle" aria-pressed="false" data-tip="Quick task — a fast win you can knock out in a few minutes">⏱️ Quick</button>
+    <input type="hidden" id="qa-category" value="urgent-important">
+    <input type="date" id="qa-date" required>
+    <button type="submit">Add</button>
+  </div>
+</form>
+
+<main id="board" class="board"></main>
+
+<main id="today-view" class="today-view" hidden>
+  <p class="today-subtitle">Overdue and due-today tasks, plus anything you've finished today.</p>
+  <div id="today-list" class="today-list"></div>
+</main>
+
+<main id="yesterday-view" class="today-view" hidden>
+  <p class="today-subtitle">Everything that was due yesterday, so nothing that fell behind goes unnoticed.</p>
+  <div id="yesterday-list" class="today-list"></div>
+</main>
+
+<main id="analytics-view" class="analytics-view" hidden>
+  <div class="analytics-range-bar">
+    <div class="range-picker" id="range-picker" role="group" aria-label="Date range"></div>
+    <div class="custom-range-inputs" id="custom-range-inputs" hidden>
+      <input type="date" id="range-start">
+      <span>to</span>
+      <input type="date" id="range-end">
+    </div>
+  </div>
+
+  <div class="analytics-stats" id="analytics-stats"></div>
+
+  <div class="analytics-panel">
+    <h2 data-tip="Number of tasks completed on each day in the selected range">Completed per day</h2>
+    <div class="trend-chart" id="trend-chart"></div>
+  </div>
+
+  <div class="analytics-grid">
+    <div class="analytics-panel">
+      <h2 data-tip="Completed tasks in this range, grouped by quadrant">By category</h2>
+      <div class="breakdown-list" id="breakdown-category"></div>
+    </div>
+    <div class="analytics-panel">
+      <h2 data-tip="Completed tasks in this range, grouped by project">By project</h2>
+      <div class="breakdown-list" id="breakdown-project"></div>
+    </div>
+  </div>
+</main>
+
+<main id="list-view" class="list-view" hidden>
+  <div class="filters">
+    <input type="text" id="filter-search" placeholder="Search title…" data-tip="Filter by task title">
+    <div class="category-picker filter-category-picker" id="filter-category-picker" role="group" aria-label="Filter by category"></div>
+    <select id="filter-project" data-tip="Filter by tagged project">
+      <option value="">All projects</option>
+    </select>
+    <select id="filter-status" data-tip="Filter by task status">
+      <option value="all">All statuses</option>
+      <option value="active">Active</option>
+      <option value="done">Done</option>
+      <option value="overdue">Overdue</option>
+    </select>
+    <label class="filter-followup" data-tip="Show only tasks flagged for a follow-up action">
+      <input type="checkbox" id="filter-followup">
+      Follow-up only
+    </label>
+    <label class="filter-followup" data-tip="Show only tasks marked as a quick win">
+      <input type="checkbox" id="filter-quick">
+      Quick only
+    </label>
+  </div>
+  <div class="list-table-wrap">
+    <table class="list-table">
+      <thead>
+        <tr>
+          <th data-tip="The task name">Title</th>
+          <th data-tip="Which quadrant (or Backburner) this task belongs to">Category</th>
+          <th data-tip="The project this task is tagged under, if any">Project</th>
+          <th data-tip="How far along the task is. Shows 'Done' at 100%">Progress</th>
+          <th data-tip="The date you scheduled this task for">Scheduled</th>
+          <th data-tip="Follow-Up = needs a follow-up action once done. Day N = calendar days since progress first moved off 0%. Overdue = past its scheduled date and not done. Quick = a fast win">Flags</th>
+        </tr>
+      </thead>
+      <tbody id="list-table-body"></tbody>
+    </table>
+  </div>
+</main>
+
+<main id="projects-view" class="projects-view" hidden>
+  <form id="add-project-form" class="add-project-form">
+    <input type="text" id="new-project-name" placeholder="New project name" required>
+    <button type="submit">Add</button>
+  </form>
+
+  <section class="projects-section">
+    <h2>Active</h2>
+    <div id="active-projects-list" class="projects-list"></div>
+  </section>
+
+  <section class="projects-section">
+    <h2>Archived</h2>
+    <div id="archived-projects-list" class="projects-list"></div>
+  </section>
+</main>
+
+<main id="archive" class="archive" hidden></main>
+
+<template id="task-card-template">
+  <article class="task-card" data-id="">
+    <div class="task-card-top">
+      <span class="drag-handle" data-tip="Drag to move between quadrants" aria-hidden="true">⠿</span>
+      <span class="date-badge" data-tip="Scheduled date"></span>
+      <span class="overdue-badge" hidden data-tip="Past its scheduled date and not yet done">Overdue</span>
+      <span class="multiday-badge" hidden data-tip="Calendar days since progress first moved off 0%">Day <span class="day-count"></span></span>
+      <span class="followup-badge" hidden data-tip="Needs a follow-up action once done">Follow-Up</span>
+      <span class="quick-badge" hidden data-tip="Quick task — a fast win">⏱️ Quick</span>
+      <button class="expand-btn" aria-label="Expand" data-tip="Show more details">⋯</button>
+    </div>
+    <h3 class="task-title"></h3>
+    <div class="project-chip" hidden data-tip="Tagged project"></div>
+    <div class="progress-row">
+      <input type="range" class="progress-slider" min="0" max="100" step="5" data-tip="Drag to update progress">
+      <span class="progress-value">0%</span>
+    </div>
+    <div class="task-card-details" hidden>
+      <label class="detail-label">Project
+        <input type="text" class="project-input" list="project-suggestions" placeholder="Type or pick a project">
+      </label>
+      <div class="recent-projects"></div>
+      <label class="detail-label">Extra Mile
+        <textarea class="extra-mile-input" rows="2" placeholder="Stretch goal / bonus detail"></textarea>
+      </label>
+      <label class="detail-label">Comment
+        <textarea class="comment-input" rows="2" placeholder="Notes"></textarea>
+      </label>
+      <label class="followup-label">
+        <input type="checkbox" class="followup-check">
+        Follow-Up needed
+      </label>
+      <label class="followup-label">
+        <input type="checkbox" class="quick-check">
+        Quick task
+      </label>
+      <label class="detail-label">Scheduled Date
+        <input type="date" class="date-input">
+      </label>
+      <div class="card-actions">
+        <button class="mark-done-btn">Mark Done</button>
+        <button class="delete-btn">Delete</button>
+      </div>
+    </div>
+  </article>
+</template>
+
+<datalist id="project-suggestions"></datalist>
+
+<script src="app.js"></script>
+<script src="sync.js"></script>
+</body>
+</html>
