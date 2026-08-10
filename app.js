@@ -311,17 +311,7 @@ function renderFilterPicker() {
   });
 }
 
-function renderProjectDatalist() {
-  const datalist = document.getElementById("project-suggestions");
-  datalist.innerHTML = "";
-  projects
-    .filter((p) => !p.archived)
-    .forEach((p) => {
-      const opt = document.createElement("option");
-      opt.value = p.name;
-      datalist.appendChild(opt);
-    });
-
+function renderProjectFilterSelect() {
   const filterSelect = document.getElementById("filter-project");
   const current = filterSelect.value;
   filterSelect.innerHTML = '<option value="">All projects</option>';
@@ -353,6 +343,56 @@ function renderRecentProjectChips(container, task) {
       render();
     });
     container.appendChild(chip);
+  });
+}
+
+// Wraps a project text input with a click/search dropdown of existing projects.
+// Selecting an option sets the input value and fires a native "change" event,
+// so it reuses whatever change handler is already wired on that input.
+function attachProjectAutocomplete(input) {
+  const wrap = document.createElement("div");
+  wrap.className = "project-autocomplete";
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+
+  const dropdown = document.createElement("div");
+  dropdown.className = "project-dropdown";
+  dropdown.hidden = true;
+  wrap.appendChild(dropdown);
+
+  function renderOptions() {
+    const query = input.value.trim().toLowerCase();
+    const matches = projects
+      .filter((p) => !p.archived)
+      .filter((p) => p.name.toLowerCase().includes(query))
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+      .slice(0, 8);
+
+    dropdown.innerHTML = "";
+    if (matches.length === 0) {
+      dropdown.hidden = true;
+      return;
+    }
+    matches.forEach((p) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "project-dropdown-item";
+      item.textContent = p.name;
+      item.addEventListener("mousedown", (e) => {
+        e.preventDefault(); // keep focus so the click registers before blur hides the dropdown
+        input.value = p.name;
+        dropdown.hidden = true;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      dropdown.appendChild(item);
+    });
+    dropdown.hidden = false;
+  }
+
+  input.addEventListener("focus", renderOptions);
+  input.addEventListener("input", renderOptions);
+  input.addEventListener("blur", () => {
+    setTimeout(() => { dropdown.hidden = true; }, 150);
   });
 }
 
@@ -447,6 +487,16 @@ function buildTaskCard(task, template, today) {
   const quickBadge = node.querySelector(".quick-badge");
   quickBadge.hidden = !task.quickTask;
 
+  const flagToggleBtn = node.querySelector(".flag-toggle-btn");
+  flagToggleBtn.classList.toggle("flagged", !!task.followUp);
+  flagToggleBtn.setAttribute("aria-pressed", String(!!task.followUp));
+  flagToggleBtn.addEventListener("click", () => {
+    task.followUp = !task.followUp;
+    touchTask(task);
+    saveTasks(tasks);
+    render();
+  });
+
   node.querySelector(".task-title").textContent = task.title;
 
   const projectChip = node.querySelector(".project-chip");
@@ -486,6 +536,7 @@ function buildTaskCard(task, template, today) {
     saveTasks(tasks);
     render();
   });
+  attachProjectAutocomplete(projectInput);
 
   renderRecentProjectChips(node.querySelector(".recent-projects"), task);
 
@@ -771,6 +822,7 @@ function switchView(view) {
   document.getElementById("board").hidden = view !== "board";
   document.getElementById("today-view").hidden = view !== "today";
   document.getElementById("yesterday-view").hidden = view !== "yesterday";
+  document.getElementById("flagged-view").hidden = view !== "flagged";
   document.getElementById("list-view").hidden = view !== "list";
   document.getElementById("analytics-view").hidden = view !== "analytics";
   document.getElementById("projects-view").hidden = view !== "projects";
@@ -920,6 +972,85 @@ function renderTodayView() {
 
 function renderYesterdayView() {
   renderDayChecklist("yesterday-list", addDays(todayStr(), -1), false, "Nothing was due yesterday.");
+}
+
+function renderFlaggedView() {
+  const container = document.getElementById("flagged-list");
+  container.innerHTML = "";
+
+  const items = activeTasks()
+    .filter((t) => t.followUp)
+    .sort((a, b) => {
+      if (a.done !== b.done) return a.done ? 1 : -1;
+      return (b.updatedAt || 0) - (a.updatedAt || 0);
+    });
+
+  if (items.length === 0) {
+    const hint = document.createElement("p");
+    hint.className = "empty-hint";
+    hint.textContent = "Nothing flagged right now.";
+    container.appendChild(hint);
+    return;
+  }
+
+  items.forEach((task) => {
+    const row = document.createElement("div");
+    row.className = "today-row" + (task.done ? " today-row-done" : "");
+
+    const check = document.createElement("button");
+    check.type = "button";
+    check.className = "today-check";
+    check.setAttribute("aria-label", task.done ? "Mark not done" : "Mark done");
+    check.textContent = task.done ? "✓" : "";
+    check.addEventListener("click", () => {
+      if (task.done) {
+        task.done = false;
+        task.progress = 90;
+        task.completedDate = null;
+        touchTask(task);
+      } else {
+        updateTaskProgress(task, 100);
+      }
+      saveTasks(tasks);
+      render();
+    });
+    row.appendChild(check);
+
+    const cat = categoryFor(task.category);
+    const catIcon = document.createElement("span");
+    catIcon.className = "cat-icon";
+    catIcon.dataset.tip = cat.label;
+    catIcon.textContent = cat.icon;
+    row.appendChild(catIcon);
+
+    const title = document.createElement("span");
+    title.className = "today-title";
+    title.textContent = task.title;
+    row.appendChild(title);
+
+    const project = task.projectId ? projectById(task.projectId) : null;
+    if (project) {
+      const chip = document.createElement("span");
+      chip.className = "project-chip today-project-chip";
+      chip.textContent = project.name;
+      row.appendChild(chip);
+    }
+
+    const unflagBtn = document.createElement("button");
+    unflagBtn.type = "button";
+    unflagBtn.className = "unflag-btn";
+    unflagBtn.dataset.tip = "Resolved — clear this flag";
+    unflagBtn.textContent = "🚩 Clear";
+    unflagBtn.addEventListener("click", () => {
+      task.followUp = false;
+      touchTask(task);
+      saveTasks(tasks);
+      render();
+    });
+    row.appendChild(unflagBtn);
+
+    container.appendChild(row);
+  });
 }
 
 // --- Analytics ---
@@ -1101,11 +1232,12 @@ function renderBreakdown(container, completed, groupFn) {
 function render() {
   renderQuickAddPicker();
   renderQuickAddQuickToggle();
-  renderProjectDatalist();
+  renderProjectFilterSelect();
   renderQaRecentProjects();
   renderBoard();
   renderTodayView();
   renderYesterdayView();
+  renderFlaggedView();
   renderArchive();
   renderFilterPicker();
   renderList();
@@ -1149,6 +1281,8 @@ document.getElementById("qa-project").addEventListener("keydown", (e) => {
 document.getElementById("qa-project").addEventListener("change", () => {
   resolveQuickAddProject();
 });
+
+attachProjectAutocomplete(document.getElementById("qa-project"));
 
 document.getElementById("filter-search").addEventListener("input", (e) => {
   filters.search = e.target.value;

@@ -22,6 +22,7 @@
       <button class="tab-btn active" data-view="board" data-tip="Active tasks grouped by priority quadrant">Board</button>
       <button class="tab-btn" data-view="today" data-tip="Just what's due today, completed items struck through">Today</button>
       <button class="tab-btn" data-view="yesterday" data-tip="What was due yesterday, so nothing slips through unnoticed">Yesterday</button>
+      <button class="tab-btn" data-view="flagged" data-tip="Tasks you've flagged as waiting on a reply, so they don't slip your mind">🚩 Flagged</button>
       <button class="tab-btn" data-view="list" data-tip="Every task in one filterable table, active and done">List</button>
       <button class="tab-btn" data-view="analytics" data-tip="Task metrics by day, week, month, or a custom range">Analytics</button>
       <button class="tab-btn" data-view="projects" data-tip="Manage your project tags">Projects</button>
@@ -44,7 +45,7 @@
     <textarea id="qa-description" class="qa-description" rows="2" placeholder="Add details or considerations (optional)" data-tip="Longer notes or context for this task — saved as its Comment"></textarea>
   </div>
   <div class="quick-add-row qa-project-row">
-    <input type="text" id="qa-project" list="project-suggestions" placeholder="Project (optional) — type &amp; Enter, or pick recent" data-tip="Tag this task to a project. Type a name and press Enter, or click a recent project">
+    <input type="text" id="qa-project" placeholder="Project (optional) — type to search, or pick recent" data-tip="Tag this task to a project. Type to search, click a match, or press Enter to create a new one">
     <div class="qa-recent-projects" id="qa-recent-projects"></div>
   </div>
   <div class="quick-add-row">
@@ -66,6 +67,11 @@
 <main id="yesterday-view" class="today-view" hidden>
   <p class="today-subtitle">Everything that was due yesterday, so nothing that fell behind goes unnoticed.</p>
   <div id="yesterday-list" class="today-list"></div>
+</main>
+
+<main id="flagged-view" class="today-view" hidden>
+  <p class="today-subtitle">Things you've essentially finished but are still waiting on — a reply, a confirmation, whatever. Tap the flag to clear it once it's resolved.</p>
+  <div id="flagged-list" class="today-list"></div>
 </main>
 
 <main id="analytics-view" class="analytics-view" hidden>
@@ -164,6 +170,7 @@
       <span class="multiday-badge" hidden data-tip="Calendar days since progress first moved off 0%">Day <span class="day-count"></span></span>
       <span class="followup-badge" hidden data-tip="Needs a follow-up action once done">Follow-Up</span>
       <span class="quick-badge" hidden data-tip="Quick task — a fast win">⏱️ Quick</span>
+      <button class="flag-toggle-btn" aria-label="Flag as waiting for reply" data-tip="Flag as waiting for reply — shows in the Flagged tab">🚩</button>
       <button class="expand-btn" aria-label="Expand" data-tip="Show more details">⋯</button>
     </div>
     <h3 class="task-title"></h3>
@@ -174,7 +181,7 @@
     </div>
     <div class="task-card-details" hidden>
       <label class="detail-label">Project
-        <input type="text" class="project-input" list="project-suggestions" placeholder="Type or pick a project">
+        <input type="text" class="project-input" placeholder="Type to search or pick a project">
       </label>
       <div class="recent-projects"></div>
       <label class="detail-label">Extra Mile
@@ -201,8 +208,6 @@
     </div>
   </article>
 </template>
-
-<datalist id="project-suggestions"></datalist>
 
 <script src="app.js"></script>
 <script src="sync.js"></script>
