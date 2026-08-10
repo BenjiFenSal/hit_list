@@ -76,18 +76,42 @@ tasks.forEach((task) => {
     task.projectId = proj.id;
   }
   delete task.project;
+  // Migrate records from before per-record merge sync existed.
+  if (task.updatedAt === undefined) {
+    task.updatedAt = task.createdAt ? Date.parse(task.createdAt) || Date.now() : Date.now();
+  }
+  if (task.deleted === undefined) task.deleted = false;
+});
+projects.forEach((project) => {
+  if (project.updatedAt === undefined) project.updatedAt = project.lastUsedAt || Date.now();
 });
 saveTasks(tasks);
+saveProjects(projects);
+
+// Active (non-deleted) tasks — deleted tasks are kept as tombstones so sync can
+// propagate the deletion to other devices instead of a stale copy reviving it.
+function activeTasks() {
+  return tasks.filter((t) => !t.deleted);
+}
+
+function touchTask(task) {
+  task.updatedAt = Date.now();
+}
+
+function touchProject(project) {
+  project.updatedAt = Date.now();
+}
 
 function getOrCreateProjectByName(name) {
   const trimmed = name.trim();
   let project = projects.find((p) => p.name.toLowerCase() === trimmed.toLowerCase());
   if (!project) {
-    project = { id: crypto.randomUUID(), name: trimmed, archived: false, lastUsedAt: Date.now() };
+    project = { id: crypto.randomUUID(), name: trimmed, archived: false, lastUsedAt: Date.now(), updatedAt: Date.now() };
     projects.push(project);
   } else {
     project.lastUsedAt = Date.now();
     project.archived = false;
+    touchProject(project);
   }
   saveProjects(projects);
   return project;
@@ -132,6 +156,7 @@ function updateTaskProgress(task, value) {
     task.done = false;
     task.completedDate = null;
   }
+  touchTask(task);
 }
 
 function addTask({ title, category, scheduledDate, projectId, comment, quickTask }) {
@@ -151,6 +176,8 @@ function addTask({ title, category, scheduledDate, projectId, comment, quickTask
     extraMile: "",
     comment: comment || "",
     createdAt: new Date().toISOString(),
+    updatedAt: Date.now(),
+    deleted: false,
   };
   tasks.push(task);
   saveTasks(tasks);
@@ -158,7 +185,11 @@ function addTask({ title, category, scheduledDate, projectId, comment, quickTask
 }
 
 function deleteTask(id) {
-  tasks = tasks.filter((t) => t.id !== id);
+  const task = tasks.find((t) => t.id === id);
+  if (task) {
+    task.deleted = true;
+    touchTask(task);
+  }
   saveTasks(tasks);
   render();
 }
@@ -315,6 +346,8 @@ function renderRecentProjectChips(container, task) {
     chip.addEventListener("click", () => {
       task.projectId = p.id;
       p.lastUsedAt = Date.now();
+      touchTask(task);
+      touchProject(p);
       saveProjects(projects);
       saveTasks(tasks);
       render();
@@ -326,7 +359,7 @@ function renderRecentProjectChips(container, task) {
 function renderOverdueBanner() {
   const banner = document.getElementById("overdue-banner");
   const today = todayStr();
-  const count = tasks.filter((t) => isOverdue(t, today)).length;
+  const count = activeTasks().filter((t) => isOverdue(t, today)).length;
   if (count === 0) {
     banner.hidden = true;
     return;
@@ -368,7 +401,7 @@ function buildQuadrant(cat, template, today) {
   const list = document.createElement("div");
   list.className = "quadrant-tasks";
 
-  const catTasks = tasks
+  const catTasks = activeTasks()
     .filter((t) => t.category === cat.id && !t.done)
     .sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate));
 
@@ -449,6 +482,7 @@ function buildTaskCard(task, template, today) {
   projectInput.addEventListener("change", () => {
     const value = projectInput.value.trim();
     task.projectId = value ? getOrCreateProjectByName(value).id : null;
+    touchTask(task);
     saveTasks(tasks);
     render();
   });
@@ -459,6 +493,7 @@ function buildTaskCard(task, template, today) {
   extraMileInput.value = task.extraMile || "";
   extraMileInput.addEventListener("change", () => {
     task.extraMile = extraMileInput.value;
+    touchTask(task);
     saveTasks(tasks);
   });
 
@@ -466,6 +501,7 @@ function buildTaskCard(task, template, today) {
   commentInput.value = task.comment || "";
   commentInput.addEventListener("change", () => {
     task.comment = commentInput.value;
+    touchTask(task);
     saveTasks(tasks);
   });
 
@@ -473,6 +509,7 @@ function buildTaskCard(task, template, today) {
   followupCheck.checked = task.followUp;
   followupCheck.addEventListener("change", () => {
     task.followUp = followupCheck.checked;
+    touchTask(task);
     saveTasks(tasks);
     render();
   });
@@ -481,6 +518,7 @@ function buildTaskCard(task, template, today) {
   quickCheck.checked = task.quickTask;
   quickCheck.addEventListener("change", () => {
     task.quickTask = quickCheck.checked;
+    touchTask(task);
     saveTasks(tasks);
     render();
   });
@@ -489,6 +527,7 @@ function buildTaskCard(task, template, today) {
   dateInput.value = task.scheduledDate;
   dateInput.addEventListener("change", () => {
     task.scheduledDate = dateInput.value;
+    touchTask(task);
     saveTasks(tasks);
     render();
   });
@@ -512,7 +551,7 @@ function renderArchive() {
   const archive = document.getElementById("archive");
   archive.innerHTML = "";
 
-  const done = tasks
+  const done = activeTasks()
     .filter((t) => t.done)
     .sort((a, b) => (b.completedDate || "").localeCompare(a.completedDate || ""));
 
@@ -549,6 +588,7 @@ function renderArchive() {
       task.done = false;
       task.progress = 90;
       task.completedDate = null;
+      touchTask(task);
       saveTasks(tasks);
       render();
     });
@@ -578,7 +618,7 @@ function renderList() {
   tbody.innerHTML = "";
   const today = todayStr();
 
-  const filtered = tasks
+  const filtered = activeTasks()
     .filter((t) => taskMatchesFilters(t, today))
     .sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate));
 
@@ -633,7 +673,7 @@ function renderList() {
 }
 
 function taskCountForProject(projectId) {
-  return tasks.filter((t) => t.projectId === projectId).length;
+  return activeTasks().filter((t) => t.projectId === projectId).length;
 }
 
 function renderProjectRow(project, container) {
@@ -669,6 +709,7 @@ function renderProjectRow(project, container) {
       const value = input.value.trim();
       if (value) {
         project.name = value;
+        touchProject(project);
         saveProjects(projects);
       }
       render();
@@ -684,6 +725,7 @@ function renderProjectRow(project, container) {
   archiveBtn.textContent = project.archived ? "Restore" : "Archive";
   archiveBtn.addEventListener("click", () => {
     project.archived = !project.archived;
+    touchProject(project);
     saveProjects(projects);
     render();
   });
@@ -772,6 +814,7 @@ function endDrag(e, commit) {
     const quadrant = el && el.closest(".quadrant");
     if (quadrant && quadrant.dataset.category && quadrant.dataset.category !== dragState.task.category) {
       dragState.task.category = quadrant.dataset.category;
+      touchTask(dragState.task);
       saveTasks(tasks);
     }
   }
@@ -790,7 +833,7 @@ function renderDayChecklist(containerId, targetDate, includeOverdueUpTo, emptyMe
   container.innerHTML = "";
   const today = todayStr();
 
-  const items = tasks
+  const items = activeTasks()
     .filter((t) => {
       const dueForTarget = includeOverdueUpTo ? t.scheduledDate <= targetDate : t.scheduledDate === targetDate;
       return (dueForTarget && !t.done) || t.completedDate === targetDate;
@@ -822,6 +865,7 @@ function renderDayChecklist(containerId, targetDate, includeOverdueUpTo, emptyMe
         task.done = false;
         task.progress = 90;
         task.completedDate = null;
+        touchTask(task);
       } else {
         updateTaskProgress(task, 100);
       }
@@ -937,8 +981,8 @@ function renderAnalytics() {
   if (!startInput.value) startInput.value = analyticsRange.start || start;
   if (!endInput.value) endInput.value = analyticsRange.end || end;
 
-  const completed = tasks.filter((t) => t.done && t.completedDate && t.completedDate >= start && t.completedDate <= end);
-  const currentlyOverdue = tasks.filter((t) => isOverdue(t, todayStr())).length;
+  const completed = activeTasks().filter((t) => t.done && t.completedDate && t.completedDate >= start && t.completedDate <= end);
+  const currentlyOverdue = activeTasks().filter((t) => isOverdue(t, todayStr())).length;
 
   const timesToComplete = completed
     .map((t) => daysBetween(t.startDate || t.createdAt.slice(0, 10), t.completedDate))

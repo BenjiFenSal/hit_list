@@ -16,6 +16,10 @@ const SYNC_CONFIG = {
 const SYNC_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const SYNC_SHEET_NAME = "HitListData";
 
+// How long to keep deleted-task tombstones around before pruning them for good.
+// Needs to comfortably outlast "longest realistic gap between syncs on a device."
+const TOMBSTONE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
+
 let syncAccessToken = null;
 let syncTokenClient = null;
 
@@ -96,43 +100,51 @@ async function ensureSyncSheetExists() {
   }
 }
 
-async function fetchRemoteUpdatedAt() {
-  const data = await sheetsApi(`/values/${encodeURIComponent(SYNC_SHEET_NAME + "!B3")}`);
-  const raw = data.values && data.values[0] && data.values[0][0];
-  return raw ? Number(raw) : 0;
-}
-
-async function pullFromSheet() {
-  const data = await sheetsApi(`/values/${encodeURIComponent(SYNC_SHEET_NAME + "!A1:B3")}`);
+async function fetchRemoteData() {
+  const data = await sheetsApi(`/values/${encodeURIComponent(SYNC_SHEET_NAME + "!A1:B2")}`);
   const rows = data.values || [];
   const row = (label) => {
     const r = rows.find((r) => r[0] === label);
     return r ? r[1] : null;
   };
-  const remoteTasks = JSON.parse(row("tasks") || "[]");
-  const remoteProjects = JSON.parse(row("projects") || "[]");
-  const remoteUpdatedAt = Number(row("updatedAt") || 0);
-
-  tasks = remoteTasks;
-  projects = remoteProjects;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
-  localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
-  localStorage.setItem(META_KEY, JSON.stringify({ updatedAt: remoteUpdatedAt }));
-  render();
+  return {
+    tasks: JSON.parse(row("tasks") || "[]"),
+    projects: JSON.parse(row("projects") || "[]"),
+  };
 }
 
-async function pushToSheet() {
-  const updatedAt = getLocalUpdatedAt() || Date.now();
-  await sheetsApi(`/values/${encodeURIComponent(SYNC_SHEET_NAME + "!A1:B3")}?valueInputOption=RAW`, {
+async function writeRemoteData(mergedTasks, mergedProjects) {
+  await sheetsApi(`/values/${encodeURIComponent(SYNC_SHEET_NAME + "!A1:B2")}?valueInputOption=RAW`, {
     method: "PUT",
     body: JSON.stringify({
       values: [
-        ["tasks", JSON.stringify(tasks)],
-        ["projects", JSON.stringify(projects)],
-        ["updatedAt", String(updatedAt)],
+        ["tasks", JSON.stringify(mergedTasks)],
+        ["projects", JSON.stringify(mergedProjects)],
       ],
     }),
   });
+}
+
+// Per-record last-write-wins merge, keyed by id. A record present on only one
+// side is kept as-is (that's how new tasks/projects created on either device
+// show up on the other). A record on both sides keeps whichever copy has the
+// newer updatedAt — this is also how deletes propagate, since deleting sets
+// `deleted: true` and bumps updatedAt rather than removing the record outright.
+function mergeById(localList, remoteList) {
+  const merged = new Map();
+  localList.forEach((item) => merged.set(item.id, item));
+  remoteList.forEach((item) => {
+    const existing = merged.get(item.id);
+    if (!existing || (item.updatedAt || 0) > (existing.updatedAt || 0)) {
+      merged.set(item.id, item);
+    }
+  });
+  return [...merged.values()];
+}
+
+function pruneOldTombstones(taskList) {
+  const cutoff = Date.now() - TOMBSTONE_RETENTION_MS;
+  return taskList.filter((t) => !(t.deleted && (t.updatedAt || 0) < cutoff));
 }
 
 async function runSync() {
@@ -146,18 +158,21 @@ async function runSync() {
     showSyncStatus("Syncing…");
     await ensureSyncSheetExists();
 
-    const remoteUpdatedAt = await fetchRemoteUpdatedAt();
-    const localUpdatedAt = getLocalUpdatedAt();
+    const remote = await fetchRemoteData();
 
-    if (remoteUpdatedAt > localUpdatedAt) {
-      await pullFromSheet();
-      showSyncStatus("Synced — pulled latest from Sheet ✓");
-    } else if (localUpdatedAt > remoteUpdatedAt) {
-      await pushToSheet();
-      showSyncStatus("Synced — pushed to Sheet ✓");
-    } else {
-      showSyncStatus("Already up to date ✓");
-    }
+    const mergedTasks = pruneOldTombstones(mergeById(tasks, remote.tasks));
+    const mergedProjects = mergeById(projects, remote.projects);
+
+    tasks = mergedTasks;
+    projects = mergedProjects;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+    bumpLocalUpdatedAt();
+    render();
+
+    await writeRemoteData(mergedTasks, mergedProjects);
+
+    showSyncStatus("Synced ✓");
   } catch (err) {
     console.error(err);
     showSyncStatus(`Sync failed: ${err.message}`, true);
