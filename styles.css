@@ -531,6 +531,33 @@ body {
   margin: 0 0 0.4rem;
 }
 
+.editable-title {
+  cursor: text;
+  border-radius: 3px;
+}
+
+.editable-title:hover,
+.editable-title:focus {
+  outline: none;
+  text-decoration: underline dotted;
+  text-decoration-color: var(--text-dim);
+  text-underline-offset: 3px;
+}
+
+.title-edit-input {
+  font: inherit;
+  font-weight: inherit;
+  width: 100%;
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+  margin: -1px 0 -1px -0.35rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
 .progress-row {
   display: flex;
   align-items: center;

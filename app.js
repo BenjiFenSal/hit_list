@@ -460,6 +460,44 @@ function buildQuadrant(cat, template, today) {
   return quadrant;
 }
 
+// Makes `el`'s text content click-to-edit for a task's title. `el` gets fully
+// replaced by a text input while editing (so don't use this on elements whose
+// tag matters to their parent, e.g. a <td> — wrap the text in a <span> first).
+function makeEditableTitle(el, task) {
+  el.classList.add("editable-title");
+  el.tabIndex = 0;
+  el.dataset.tip = "Click to rename";
+  const startEdit = () => {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = task.title;
+    input.className = "title-edit-input";
+    el.replaceWith(input);
+    input.focus();
+    input.select();
+
+    const commit = () => {
+      const value = input.value.trim();
+      if (value && value !== task.title) {
+        task.title = value;
+        touchTask(task);
+        saveTasks(tasks);
+      }
+      render();
+    };
+    input.addEventListener("click", (e) => e.stopPropagation());
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") input.blur();
+      if (e.key === "Escape") { input.value = task.title; input.blur(); }
+    });
+  };
+  el.addEventListener("click", startEdit);
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") startEdit();
+  });
+}
+
 function buildTaskCard(task, template, today) {
   const node = template.content.firstElementChild.cloneNode(true);
   node.dataset.id = task.id;
@@ -497,7 +535,9 @@ function buildTaskCard(task, template, today) {
     render();
   });
 
-  node.querySelector(".task-title").textContent = task.title;
+  const titleEl = node.querySelector(".task-title");
+  titleEl.textContent = task.title;
+  makeEditableTitle(titleEl, task);
 
   const projectChip = node.querySelector(".project-chip");
   const project = task.projectId ? projectById(task.projectId) : null;
@@ -624,6 +664,7 @@ function renderArchive() {
     const title = document.createElement("div");
     title.className = "title";
     title.textContent = task.title;
+    makeEditableTitle(title, task);
     const meta = document.createElement("div");
     meta.className = "meta";
     const catLabel = categoryFor(task.category)?.label || task.category;
@@ -689,7 +730,10 @@ function renderList() {
     if (task.done) tr.classList.add("row-done");
 
     const titleTd = document.createElement("td");
-    titleTd.textContent = task.title;
+    const titleSpan = document.createElement("span");
+    titleSpan.textContent = task.title;
+    makeEditableTitle(titleSpan, task);
+    titleTd.appendChild(titleSpan);
     tr.appendChild(titleTd);
 
     const catTd = document.createElement("td");
@@ -936,6 +980,7 @@ function renderDayChecklist(containerId, targetDate, includeOverdueUpTo, emptyMe
     const title = document.createElement("span");
     title.className = "today-title";
     title.textContent = task.title;
+    makeEditableTitle(title, task);
     row.appendChild(title);
 
     const project = task.projectId ? projectById(task.projectId) : null;
@@ -1026,6 +1071,7 @@ function renderFlaggedView() {
     const title = document.createElement("span");
     title.className = "today-title";
     title.textContent = task.title;
+    makeEditableTitle(title, task);
     row.appendChild(title);
 
     const project = task.projectId ? projectById(task.projectId) : null;
