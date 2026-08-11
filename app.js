@@ -21,10 +21,21 @@ const CATEGORIES = [
   { id: "urgent-not-important", label: "Urgent, Not Important", icon: "⚡", tip: "Handle quickly or delegate — time pressure, lower value" },
   { id: "neither", label: "Neither", icon: "💤", tip: "Low priority — reconsider if it's worth doing" },
   { id: "backburner", label: "Backburner", icon: "🧊", tip: "Ideas or notes you're logging, not on your active to-do list" },
+  { id: "idea-vault", label: "Idea Vault", icon: "💡", tip: "Ideas worth logging — no date needed, just captured for later" },
 ];
 
-const BOARD_CATEGORIES = CATEGORIES.filter((c) => c.id !== "backburner");
+const BOARD_CATEGORIES = CATEGORIES.filter((c) => c.id !== "backburner" && c.id !== "idea-vault");
 const BACKBURNER = CATEGORIES.find((c) => c.id === "backburner");
+const IDEA_VAULT = CATEGORIES.find((c) => c.id === "idea-vault");
+
+const PROJECT_COLOR_PALETTE = [
+  "#e05263", "#e0a63b", "#d4c04a", "#5fb86d", "#16a3a3",
+  "#3b6ff0", "#7c6fe0", "#a85fd1", "#d1608f", "#8a8f98",
+];
+
+function nextProjectColor() {
+  return PROJECT_COLOR_PALETTE[projects.length % PROJECT_COLOR_PALETTE.length];
+}
 
 function dateToStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -44,7 +55,49 @@ function loadTasks() {
   }
 }
 
+// --- Undo ---
+// Snapshots the pre-mutation state before every save, so Undo can restore it.
+// Multiple saves within the same synchronous action (e.g. a handler that
+// touches both a task and a project) are coalesced into one undo step via the
+// pending-flag trick below, so Undo reverts a whole user action, not a single
+// field write.
+const UNDO_LIMIT = 25;
+let undoStack = [];
+let undoSnapshotPending = false;
+
+function pushUndoSnapshot() {
+  if (undoSnapshotPending) return;
+  undoStack.push({
+    tasks: localStorage.getItem(STORAGE_KEY) || "[]",
+    projects: localStorage.getItem(PROJECTS_KEY) || "[]",
+  });
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  undoSnapshotPending = true;
+  setTimeout(() => { undoSnapshotPending = false; }, 0);
+  updateUndoButtonState();
+}
+
+function performUndo() {
+  const snapshot = undoStack.pop();
+  if (!snapshot) return;
+  tasks = JSON.parse(snapshot.tasks);
+  projects = JSON.parse(snapshot.projects);
+  localStorage.setItem(STORAGE_KEY, snapshot.tasks);
+  localStorage.setItem(PROJECTS_KEY, snapshot.projects);
+  bumpLocalUpdatedAt();
+  updateUndoButtonState();
+  render();
+}
+
+function updateUndoButtonState() {
+  const btn = document.getElementById("undo-btn");
+  if (!btn) return;
+  btn.disabled = undoStack.length === 0;
+  btn.dataset.tip = undoStack.length ? `Undo your last change (${undoStack.length} available)` : "Nothing to undo";
+}
+
 function saveTasks(tasks) {
+  pushUndoSnapshot();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
   bumpLocalUpdatedAt();
 }
@@ -60,6 +113,7 @@ function loadProjects() {
 }
 
 function saveProjects(projects) {
+  pushUndoSnapshot();
   localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
   bumpLocalUpdatedAt();
 }
@@ -82,8 +136,10 @@ tasks.forEach((task) => {
   }
   if (task.deleted === undefined) task.deleted = false;
 });
-projects.forEach((project) => {
+projects.forEach((project, i) => {
   if (project.updatedAt === undefined) project.updatedAt = project.lastUsedAt || Date.now();
+  if (project.color === undefined) project.color = PROJECT_COLOR_PALETTE[i % PROJECT_COLOR_PALETTE.length];
+  if (project.parentId === undefined) project.parentId = null;
 });
 saveTasks(tasks);
 saveProjects(projects);
@@ -106,7 +162,15 @@ function getOrCreateProjectByName(name) {
   const trimmed = name.trim();
   let project = projects.find((p) => p.name.toLowerCase() === trimmed.toLowerCase());
   if (!project) {
-    project = { id: crypto.randomUUID(), name: trimmed, archived: false, lastUsedAt: Date.now(), updatedAt: Date.now() };
+    project = {
+      id: crypto.randomUUID(),
+      name: trimmed,
+      archived: false,
+      parentId: null,
+      color: nextProjectColor(),
+      lastUsedAt: Date.now(),
+      updatedAt: Date.now(),
+    };
     projects.push(project);
   } else {
     project.lastUsedAt = Date.now();
@@ -128,6 +192,43 @@ function recentProjects(limit = 5) {
     .slice(0, limit);
 }
 
+// --- Project hierarchy helpers ---
+function projectChildren(parentId) {
+  return projects.filter((p) => (p.parentId || null) === parentId);
+}
+
+function projectDescendantIds(id) {
+  const ids = [];
+  projectChildren(id).forEach((child) => {
+    ids.push(child.id);
+    ids.push(...projectDescendantIds(child.id));
+  });
+  return ids;
+}
+
+// Valid parents for `project` exclude itself and its own descendants (no cycles).
+function validParentOptions(project) {
+  const excluded = new Set([project.id, ...projectDescendantIds(project.id)]);
+  return projects.filter((p) => !excluded.has(p.id));
+}
+
+function projectPath(project) {
+  const parts = [project.name];
+  let current = project;
+  let guard = 0;
+  while (current.parentId && guard++ < 20) {
+    const parent = projectById(current.parentId);
+    if (!parent) break;
+    parts.unshift(parent.name);
+    current = parent;
+  }
+  return parts.join(" / ");
+}
+
+function projectColor(project) {
+  return (project && project.color) || "var(--accent)";
+}
+
 function daySpan(startDate, refDate) {
   const start = new Date(startDate + "T00:00:00");
   const ref = new Date(refDate + "T00:00:00");
@@ -137,6 +238,12 @@ function daySpan(startDate, refDate) {
 
 function isOverdue(task, today) {
   return !task.done && task.scheduledDate < today;
+}
+
+// Computed live from startDate rather than trusting the stored task.multiDay
+// flag, which only used to get refreshed when the progress slider moved.
+function isMultiDay(task, today) {
+  return !!(task.startDate && today > task.startDate);
 }
 
 function updateTaskProgress(task, value) {
@@ -159,13 +266,26 @@ function updateTaskProgress(task, value) {
   touchTask(task);
 }
 
+// Explicit "start the clock" control, independent of the progress slider —
+// lets a task be marked in progress (for Day-N tracking) without necessarily
+// moving its progress % yet. Clicking again while already started undoes it.
+function toggleInProgress(task) {
+  if (task.startDate) {
+    task.startDate = null;
+    task.multiDay = false;
+  } else {
+    task.startDate = todayStr();
+  }
+  touchTask(task);
+}
+
 function addTask({ title, category, scheduledDate, projectId, comment, quickTask }) {
   const task = {
     id: crypto.randomUUID(),
     title,
     category,
     projectId: projectId || null,
-    scheduledDate,
+    scheduledDate: scheduledDate || null,
     progress: 0,
     startDate: null,
     multiDay: false,
@@ -226,7 +346,18 @@ function renderQuickAddPicker() {
     quickAddCategory = id;
     document.getElementById("qa-category").value = id;
     renderQuickAddPicker();
+    updateQaDateVisibility();
   });
+}
+
+// Idea Vault entries aren't dated — hide the date field and drop the
+// "required" constraint when that category is selected.
+function updateQaDateVisibility() {
+  const isIdea = quickAddCategory === "idea-vault";
+  const dateInput = document.getElementById("qa-date");
+  dateInput.hidden = isIdea;
+  dateInput.required = !isIdea;
+  document.getElementById("qa-idea-hint").hidden = !isIdea;
 }
 
 function renderQuickAddQuickToggle() {
@@ -364,7 +495,7 @@ function attachProjectAutocomplete(input) {
     const query = input.value.trim().toLowerCase();
     const matches = projects
       .filter((p) => !p.archived)
-      .filter((p) => p.name.toLowerCase().includes(query))
+      .filter((p) => projectPath(p).toLowerCase().includes(query))
       .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
       .slice(0, 8);
 
@@ -377,7 +508,8 @@ function attachProjectAutocomplete(input) {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "project-dropdown-item";
-      item.textContent = p.name;
+      item.textContent = projectPath(p);
+      item.style.setProperty("--chip-color", projectColor(p));
       item.addEventListener("mousedown", (e) => {
         e.preventDefault(); // keep focus so the click registers before blur hides the dropdown
         input.value = p.name;
@@ -408,6 +540,29 @@ function renderOverdueBanner() {
   banner.textContent = `⚠️ ${count} task${count === 1 ? "" : "s"} overdue — tap to view`;
 }
 
+// --- Board quadrant collapse state (persisted, doesn't affect task data) ---
+const COLLAPSED_QUADRANTS_KEY = "hitlist.collapsedQuadrants.v1";
+
+function loadCollapsedQuadrants() {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_QUADRANTS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+let collapsedQuadrants = loadCollapsedQuadrants();
+
+function isQuadrantCollapsed(categoryId) {
+  return !!collapsedQuadrants[categoryId];
+}
+
+function toggleQuadrantCollapsed(categoryId) {
+  collapsedQuadrants[categoryId] = !collapsedQuadrants[categoryId];
+  localStorage.setItem(COLLAPSED_QUADRANTS_KEY, JSON.stringify(collapsedQuadrants));
+}
+
 function renderBoard() {
   const board = document.getElementById("board");
   board.innerHTML = "";
@@ -432,18 +587,45 @@ function buildQuadrant(cat, template, today) {
   quadrant.className = "quadrant";
   quadrant.dataset.category = cat.id;
 
+  const catTasks = activeTasks()
+    .filter((t) => t.category === cat.id && !t.done)
+    .sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate));
+  const dueTodayCount = catTasks.filter((t) => t.scheduledDate <= today).length;
+
+  const collapsed = isQuadrantCollapsed(cat.id);
+  quadrant.classList.toggle("collapsed", collapsed);
+
+  const headingRow = document.createElement("div");
+  headingRow.className = "quadrant-heading-row";
+
+  const collapseBtn = document.createElement("button");
+  collapseBtn.type = "button";
+  collapseBtn.className = "quadrant-collapse-btn";
+  collapseBtn.textContent = collapsed ? "▸" : "▾";
+  collapseBtn.setAttribute("aria-label", collapsed ? "Expand quadrant" : "Collapse quadrant");
+  collapseBtn.addEventListener("click", () => {
+    toggleQuadrantCollapsed(cat.id);
+    renderBoard();
+  });
+  headingRow.appendChild(collapseBtn);
+
   const heading = document.createElement("h2");
   heading.dataset.tip = cat.tip;
   heading.innerHTML = `<span class="cat-icon">${cat.icon}</span>`;
   heading.appendChild(document.createTextNode(cat.label));
-  quadrant.appendChild(heading);
+  headingRow.appendChild(heading);
+
+  const countBadge = document.createElement("span");
+  countBadge.className = "quadrant-count-badge";
+  countBadge.textContent = `${dueTodayCount}/${catTasks.length}`;
+  countBadge.dataset.tip = `${dueTodayCount} due today or overdue, out of ${catTasks.length} total in this quadrant`;
+  headingRow.appendChild(countBadge);
+
+  quadrant.appendChild(headingRow);
 
   const list = document.createElement("div");
   list.className = "quadrant-tasks";
-
-  const catTasks = activeTasks()
-    .filter((t) => t.category === cat.id && !t.done)
-    .sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate));
+  if (collapsed) list.hidden = true;
 
   if (catTasks.length === 0) {
     const hint = document.createElement("p");
@@ -514,7 +696,7 @@ function buildTaskCard(task, template, today) {
   node.querySelector(".overdue-badge").hidden = !isOverdue(task, today);
 
   const multidayBadge = node.querySelector(".multiday-badge");
-  if (task.multiDay && task.startDate) {
+  if (isMultiDay(task, today)) {
     multidayBadge.hidden = false;
     multidayBadge.querySelector(".day-count").textContent = daySpan(task.startDate, today);
   }
@@ -524,6 +706,18 @@ function buildTaskCard(task, template, today) {
 
   const quickBadge = node.querySelector(".quick-badge");
   quickBadge.hidden = !task.quickTask;
+
+  const inProgressBtn = node.querySelector(".in-progress-btn");
+  inProgressBtn.classList.toggle("in-progress", !!task.startDate);
+  inProgressBtn.setAttribute("aria-pressed", String(!!task.startDate));
+  inProgressBtn.dataset.tip = task.startDate
+    ? `In progress since ${formatDateBadge(task.startDate)} — click to undo`
+    : "Mark as in progress — starts the Day counter";
+  inProgressBtn.addEventListener("click", () => {
+    toggleInProgress(task);
+    saveTasks(tasks);
+    render();
+  });
 
   const flagToggleBtn = node.querySelector(".flag-toggle-btn");
   flagToggleBtn.classList.toggle("flagged", !!task.followUp);
@@ -544,6 +738,7 @@ function buildTaskCard(task, template, today) {
   if (project) {
     projectChip.hidden = false;
     projectChip.textContent = project.archived ? `${project.name} (archived)` : project.name;
+    projectChip.style.setProperty("--chip-color", projectColor(project));
   }
 
   const slider = node.querySelector(".progress-slider");
@@ -712,7 +907,7 @@ function renderList() {
 
   const filtered = activeTasks()
     .filter((t) => taskMatchesFilters(t, today))
-    .sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate));
+    .sort((a, b) => (a.scheduledDate || "").localeCompare(b.scheduledDate || ""));
 
   if (filtered.length === 0) {
     const tr = document.createElement("tr");
@@ -743,7 +938,15 @@ function renderList() {
 
     const projTd = document.createElement("td");
     const project = task.projectId ? projectById(task.projectId) : null;
-    projTd.textContent = project ? project.name : "—";
+    if (project) {
+      const dot = document.createElement("span");
+      dot.className = "project-dot";
+      dot.style.background = projectColor(project);
+      projTd.appendChild(dot);
+      projTd.appendChild(document.createTextNode(project.name));
+    } else {
+      projTd.textContent = "—";
+    }
     tr.appendChild(projTd);
 
     const progTd = document.createElement("td");
@@ -751,7 +954,7 @@ function renderList() {
     tr.appendChild(progTd);
 
     const dateTd = document.createElement("td");
-    dateTd.textContent = formatDateBadge(task.scheduledDate);
+    dateTd.textContent = task.scheduledDate ? formatDateBadge(task.scheduledDate) : "—";
     tr.appendChild(dateTd);
 
     const flagsTd = document.createElement("td");
@@ -759,7 +962,7 @@ function renderList() {
     if (isOverdue(task, today)) flags.push("Overdue");
     if (task.followUp) flags.push("Follow-Up");
     if (task.quickTask) flags.push("Quick");
-    if (task.multiDay) flags.push(`Day ${daySpan(task.startDate, today)}`);
+    if (isMultiDay(task, today)) flags.push(`Day ${daySpan(task.startDate, today)}`);
     flagsTd.textContent = flags.join(" · ") || "—";
     tr.appendChild(flagsTd);
 
@@ -771,9 +974,36 @@ function taskCountForProject(projectId) {
   return activeTasks().filter((t) => t.projectId === projectId).length;
 }
 
-function renderProjectRow(project, container) {
+function renderProjectRow(project, container, depth) {
   const row = document.createElement("div");
   row.className = "project-row";
+  row.style.marginLeft = `${depth * 1.25}rem`;
+
+  const swatchBtn = document.createElement("button");
+  swatchBtn.type = "button";
+  swatchBtn.className = "project-swatch";
+  swatchBtn.style.background = projectColor(project);
+  swatchBtn.setAttribute("aria-label", "Change project color");
+  swatchBtn.dataset.tip = "Change color";
+  swatchBtn.addEventListener("click", () => {
+    const palette = document.createElement("div");
+    palette.className = "project-swatch-palette";
+    PROJECT_COLOR_PALETTE.forEach((c) => {
+      const opt = document.createElement("button");
+      opt.type = "button";
+      opt.className = "project-swatch-option";
+      opt.style.background = c;
+      if (c === project.color) opt.classList.add("selected");
+      opt.addEventListener("click", () => {
+        project.color = c;
+        touchProject(project);
+        saveProjects(projects);
+        render();
+      });
+      palette.appendChild(opt);
+    });
+    swatchBtn.replaceWith(palette);
+  });
 
   const nameWrap = document.createElement("div");
   nameWrap.className = "project-row-name";
@@ -788,6 +1018,30 @@ function renderProjectRow(project, container) {
 
   const actions = document.createElement("div");
   actions.className = "project-row-actions";
+
+  const moveSelect = document.createElement("select");
+  moveSelect.className = "project-move-select";
+  moveSelect.dataset.tip = "Nest this project under another one";
+  const topOpt = document.createElement("option");
+  topOpt.value = "";
+  topOpt.textContent = "No parent (top-level)";
+  if (!project.parentId) topOpt.selected = true;
+  moveSelect.appendChild(topOpt);
+  validParentOptions(project)
+    .sort((a, b) => projectPath(a).localeCompare(projectPath(b)))
+    .forEach((p) => {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = projectPath(p);
+      if (p.id === project.parentId) opt.selected = true;
+      moveSelect.appendChild(opt);
+    });
+  moveSelect.addEventListener("change", () => {
+    project.parentId = moveSelect.value || null;
+    touchProject(project);
+    saveProjects(projects);
+    render();
+  });
 
   const editBtn = document.createElement("button");
   editBtn.textContent = "Rename";
@@ -825,12 +1079,36 @@ function renderProjectRow(project, container) {
     render();
   });
 
+  actions.appendChild(moveSelect);
   actions.appendChild(editBtn);
   actions.appendChild(archiveBtn);
 
+  row.appendChild(swatchBtn);
   row.appendChild(nameWrap);
   row.appendChild(actions);
   container.appendChild(row);
+}
+
+// Builds a parent -> children map (only among the given, pre-filtered list of
+// projects) and renders it depth-first so children appear indented under
+// their parent, active and archived lists rendered independently.
+function renderProjectTree(container, list) {
+  const idsInList = new Set(list.map((p) => p.id));
+  const byParent = new Map();
+  list.forEach((p) => {
+    const parentKey = p.parentId && idsInList.has(p.parentId) ? p.parentId : null;
+    if (!byParent.has(parentKey)) byParent.set(parentKey, []);
+    byParent.get(parentKey).push(p);
+  });
+  byParent.forEach((arr) => arr.sort((a, b) => a.name.localeCompare(b.name)));
+
+  function renderLevel(parentKey, depth) {
+    (byParent.get(parentKey) || []).forEach((p) => {
+      renderProjectRow(p, container, depth);
+      renderLevel(p.id, depth + 1);
+    });
+  }
+  renderLevel(null, 0);
 }
 
 function renderProjectsView() {
@@ -848,7 +1126,7 @@ function renderProjectsView() {
     hint.textContent = "No active projects yet";
     activeList.appendChild(hint);
   } else {
-    active.forEach((p) => renderProjectRow(p, activeList));
+    renderProjectTree(activeList, active);
   }
 
   if (archived.length === 0) {
@@ -857,7 +1135,7 @@ function renderProjectsView() {
     hint.textContent = "No archived projects";
     archivedList.appendChild(hint);
   } else {
-    archived.forEach((p) => renderProjectRow(p, archivedList));
+    renderProjectTree(archivedList, archived);
   }
 }
 
@@ -867,6 +1145,7 @@ function switchView(view) {
   document.getElementById("today-view").hidden = view !== "today";
   document.getElementById("yesterday-view").hidden = view !== "yesterday";
   document.getElementById("flagged-view").hidden = view !== "flagged";
+  document.getElementById("ideas-view").hidden = view !== "ideas";
   document.getElementById("list-view").hidden = view !== "list";
   document.getElementById("analytics-view").hidden = view !== "analytics";
   document.getElementById("projects-view").hidden = view !== "projects";
@@ -931,12 +1210,13 @@ function renderDayChecklist(containerId, targetDate, includeOverdueUpTo, emptyMe
 
   const items = activeTasks()
     .filter((t) => {
+      if (t.category === "idea-vault") return false;
       const dueForTarget = includeOverdueUpTo ? t.scheduledDate <= targetDate : t.scheduledDate === targetDate;
       return (dueForTarget && !t.done) || t.completedDate === targetDate;
     })
     .sort((a, b) => {
       if (a.done !== b.done) return a.done ? 1 : -1;
-      return a.scheduledDate.localeCompare(b.scheduledDate);
+      return (a.scheduledDate || "").localeCompare(b.scheduledDate || "");
     });
 
   if (items.length === 0) {
@@ -988,6 +1268,7 @@ function renderDayChecklist(containerId, targetDate, includeOverdueUpTo, emptyMe
       const chip = document.createElement("span");
       chip.className = "project-chip today-project-chip";
       chip.textContent = project.name;
+      chip.style.setProperty("--chip-color", projectColor(project));
       row.appendChild(chip);
     }
 
@@ -1079,6 +1360,7 @@ function renderFlaggedView() {
       const chip = document.createElement("span");
       chip.className = "project-chip today-project-chip";
       chip.textContent = project.name;
+      chip.style.setProperty("--chip-color", projectColor(project));
       row.appendChild(chip);
     }
 
@@ -1096,6 +1378,164 @@ function renderFlaggedView() {
     row.appendChild(unflagBtn);
 
     container.appendChild(row);
+  });
+}
+
+// Idea Vault entries are undated tasks (category "idea-vault") — same
+// underlying task record as everything else, just shown here instead of on
+// the Board, and with project/comment editing tucked behind an expand toggle
+// since there's no card to expand.
+function renderIdeasView() {
+  const container = document.getElementById("ideas-list");
+  container.innerHTML = "";
+
+  const items = activeTasks()
+    .filter((t) => t.category === "idea-vault")
+    .sort((a, b) => {
+      if (a.done !== b.done) return a.done ? 1 : -1;
+      return (b.createdAt || "").localeCompare(a.createdAt || "");
+    });
+
+  if (items.length === 0) {
+    const hint = document.createElement("p");
+    hint.className = "empty-hint";
+    hint.textContent = "No ideas logged yet.";
+    container.appendChild(hint);
+    return;
+  }
+
+  items.forEach((task) => {
+    const wrap = document.createElement("div");
+    wrap.className = "idea-wrap";
+
+    const row = document.createElement("div");
+    row.className = "today-row" + (task.done ? " today-row-done" : "");
+
+    const check = document.createElement("button");
+    check.type = "button";
+    check.className = "today-check";
+    check.setAttribute("aria-label", task.done ? "Mark not done" : "Mark done");
+    check.dataset.tip = task.done ? "Restore to active ideas" : "Acted on — archive this idea";
+    check.textContent = task.done ? "✓" : "";
+    check.addEventListener("click", () => {
+      if (task.done) {
+        task.done = false;
+        task.progress = 90;
+        task.completedDate = null;
+        touchTask(task);
+      } else {
+        updateTaskProgress(task, 100);
+      }
+      saveTasks(tasks);
+      render();
+    });
+    row.appendChild(check);
+
+    const title = document.createElement("span");
+    title.className = "today-title";
+    title.textContent = task.title;
+    makeEditableTitle(title, task);
+    row.appendChild(title);
+
+    const project = task.projectId ? projectById(task.projectId) : null;
+    if (project) {
+      const chip = document.createElement("span");
+      chip.className = "project-chip today-project-chip";
+      chip.textContent = project.name;
+      chip.style.setProperty("--chip-color", projectColor(project));
+      row.appendChild(chip);
+    }
+
+    if (task.quickTask) {
+      const badge = document.createElement("span");
+      badge.className = "quick-badge";
+      badge.dataset.tip = "Quick task — a fast win";
+      badge.textContent = "⏱️ Quick";
+      row.appendChild(badge);
+    }
+
+    const flagBtn = document.createElement("button");
+    flagBtn.type = "button";
+    flagBtn.className = "flag-toggle-btn" + (task.followUp ? " flagged" : "");
+    flagBtn.dataset.tip = "Flag as waiting for reply — shows in the Flagged tab";
+    flagBtn.textContent = "🚩";
+    flagBtn.addEventListener("click", () => {
+      task.followUp = !task.followUp;
+      touchTask(task);
+      saveTasks(tasks);
+      render();
+    });
+    row.appendChild(flagBtn);
+
+    const expandBtn = document.createElement("button");
+    expandBtn.type = "button";
+    expandBtn.className = "expand-btn";
+    expandBtn.textContent = "⋯";
+    expandBtn.dataset.tip = "Show more details";
+    row.appendChild(expandBtn);
+
+    wrap.appendChild(row);
+
+    const details = document.createElement("div");
+    details.className = "idea-details";
+    details.hidden = true;
+
+    const projectLabel = document.createElement("label");
+    projectLabel.className = "detail-label";
+    projectLabel.textContent = "Project";
+    const projectInput = document.createElement("input");
+    projectInput.type = "text";
+    projectInput.className = "project-input";
+    projectInput.placeholder = "Type to search or pick a project";
+    projectInput.value = project ? project.name : "";
+    projectInput.addEventListener("change", () => {
+      const value = projectInput.value.trim();
+      task.projectId = value ? getOrCreateProjectByName(value).id : null;
+      touchTask(task);
+      saveTasks(tasks);
+      render();
+    });
+    projectLabel.appendChild(projectInput);
+    details.appendChild(projectLabel);
+    attachProjectAutocomplete(projectInput);
+
+    const recentWrap = document.createElement("div");
+    recentWrap.className = "recent-projects";
+    renderRecentProjectChips(recentWrap, task);
+    details.appendChild(recentWrap);
+
+    const commentLabel = document.createElement("label");
+    commentLabel.className = "detail-label";
+    commentLabel.textContent = "Comment";
+    const commentInput = document.createElement("textarea");
+    commentInput.rows = 2;
+    commentInput.placeholder = "Notes";
+    commentInput.value = task.comment || "";
+    commentInput.addEventListener("change", () => {
+      task.comment = commentInput.value;
+      touchTask(task);
+      saveTasks(tasks);
+    });
+    commentLabel.appendChild(commentInput);
+    details.appendChild(commentLabel);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "delete-btn";
+    deleteBtn.textContent = "Delete";
+    deleteBtn.addEventListener("click", () => {
+      if (confirm(`Delete "${task.title}"?`)) {
+        deleteTask(task.id);
+      }
+    });
+    details.appendChild(deleteBtn);
+
+    expandBtn.addEventListener("click", () => {
+      details.hidden = !details.hidden;
+    });
+
+    wrap.appendChild(details);
+    container.appendChild(wrap);
   });
 }
 
@@ -1199,7 +1639,7 @@ function renderAnalytics() {
   });
   renderBreakdown(document.getElementById("breakdown-project"), completed, (t) => {
     const p = t.projectId ? projectById(t.projectId) : null;
-    return { key: p ? p.name : "No project", prefix: "" };
+    return { key: p ? projectPath(p) : "No project", prefix: "", color: p ? projectColor(p) : null };
   });
 }
 
@@ -1232,10 +1672,12 @@ function renderBreakdown(container, completed, groupFn) {
   container.innerHTML = "";
   const counts = new Map();
   const prefixes = new Map();
+  const colors = new Map();
   completed.forEach((t) => {
-    const { key, prefix } = groupFn(t);
+    const { key, prefix, color } = groupFn(t);
     counts.set(key, (counts.get(key) || 0) + 1);
     prefixes.set(key, prefix || "");
+    if (color) colors.set(key, color);
   });
 
   if (counts.size === 0) {
@@ -1262,6 +1704,7 @@ function renderBreakdown(container, completed, groupFn) {
       const bar = document.createElement("div");
       bar.className = "breakdown-bar";
       bar.style.width = `${(count / max) * 100}%`;
+      if (colors.has(key)) bar.style.background = colors.get(key);
       barWrap.appendChild(bar);
 
       const countEl = document.createElement("div");
@@ -1284,6 +1727,7 @@ function render() {
   renderTodayView();
   renderYesterdayView();
   renderFlaggedView();
+  renderIdeasView();
   renderArchive();
   renderFilterPicker();
   renderList();
@@ -1298,19 +1742,22 @@ document.getElementById("quick-add").addEventListener("submit", (e) => {
   const title = document.getElementById("qa-title").value.trim();
   const comment = document.getElementById("qa-description").value.trim();
   const category = quickAddCategory;
-  const scheduledDate = document.getElementById("qa-date").value;
-  if (!title || !scheduledDate) return;
+  const isIdea = category === "idea-vault";
+  const scheduledDate = isIdea ? null : document.getElementById("qa-date").value;
+  if (!title || (!isIdea && !scheduledDate)) return;
   const project = resolveQuickAddProject();
   addTask({ title, category, scheduledDate, projectId: project ? project.id : null, comment, quickTask: quickAddIsQuickTask });
   e.target.reset();
   quickAddProjectId = null;
   quickAddIsQuickTask = false;
   document.getElementById("qa-date").value = todayStr();
+  updateQaDateVisibility();
   renderQaRecentProjects();
   renderQuickAddQuickToggle();
 });
 
 document.getElementById("qa-date").value = todayStr();
+updateQaDateVisibility();
 
 document.getElementById("qa-quick-toggle").addEventListener("click", () => {
   quickAddIsQuickTask = !quickAddIsQuickTask;
@@ -1409,5 +1856,8 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
 });
 
 setTheme(currentTheme());
+
+document.getElementById("undo-btn").addEventListener("click", performUndo);
+updateUndoButtonState();
 
 render();

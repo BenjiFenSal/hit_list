@@ -23,11 +23,13 @@
       <button class="tab-btn" data-view="today" data-tip="Just what's due today, completed items struck through">Today</button>
       <button class="tab-btn" data-view="yesterday" data-tip="What was due yesterday, so nothing slips through unnoticed">Yesterday</button>
       <button class="tab-btn" data-view="flagged" data-tip="Tasks you've flagged as waiting on a reply, so they don't slip your mind">🚩 Flagged</button>
+      <button class="tab-btn" data-view="ideas" data-tip="Ideas you've logged — no dates, just captured for later">💡 Ideas</button>
       <button class="tab-btn" data-view="list" data-tip="Every task in one filterable table, active and done">List</button>
       <button class="tab-btn" data-view="analytics" data-tip="Task metrics by day, week, month, or a custom range">Analytics</button>
       <button class="tab-btn" data-view="projects" data-tip="Manage your project tags">Projects</button>
       <button class="tab-btn" data-view="archive" data-tip="Completed tasks you can restore">Archive</button>
     </div>
+    <button type="button" id="undo-btn" class="theme-toggle" data-tip="Nothing to undo" aria-label="Undo last change" disabled>↩️</button>
     <button type="button" id="sync-btn" class="theme-toggle" data-tip="Sign in with Google and sync with your Sheet" aria-label="Sync with Google Sheets">🔄</button>
     <button type="button" id="theme-toggle" class="theme-toggle" data-tip="Toggle light / dark theme" aria-label="Toggle light or dark theme">🌙</button>
   </div>
@@ -53,6 +55,7 @@
     <button type="button" id="qa-quick-toggle" class="quick-toggle" aria-pressed="false" data-tip="Quick task — a fast win you can knock out in a few minutes">⏱️ Quick</button>
     <input type="hidden" id="qa-category" value="urgent-important">
     <input type="date" id="qa-date" required>
+    <span id="qa-idea-hint" class="qa-idea-hint" hidden>No date needed for ideas</span>
     <button type="submit">Add</button>
   </div>
 </form>
@@ -72,6 +75,11 @@
 <main id="flagged-view" class="today-view" hidden>
   <p class="today-subtitle">Things you've essentially finished but are still waiting on — a reply, a confirmation, whatever. Tap the flag to clear it once it's resolved.</p>
   <div id="flagged-list" class="today-list"></div>
+</main>
+
+<main id="ideas-view" class="today-view" hidden>
+  <p class="today-subtitle">Ideas worth logging — no dates attached, just captured so they don't get lost.</p>
+  <div id="ideas-list" class="today-list"></div>
 </main>
 
 <main id="analytics-view" class="analytics-view" hidden>
@@ -167,9 +175,10 @@
       <span class="drag-handle" data-tip="Drag to move between quadrants" aria-hidden="true">⠿</span>
       <span class="date-badge" data-tip="Scheduled date"></span>
       <span class="overdue-badge" hidden data-tip="Past its scheduled date and not yet done">Overdue</span>
-      <span class="multiday-badge" hidden data-tip="Calendar days since progress first moved off 0%">Day <span class="day-count"></span></span>
+      <span class="multiday-badge" hidden data-tip="Calendar days since this task was marked in progress">Day <span class="day-count"></span></span>
       <span class="followup-badge" hidden data-tip="Needs a follow-up action once done">Follow-Up</span>
       <span class="quick-badge" hidden data-tip="Quick task — a fast win">⏱️ Quick</span>
+      <button class="in-progress-btn" aria-label="Mark as in progress" data-tip="Mark as in progress — starts the Day counter">▶️</button>
       <button class="flag-toggle-btn" aria-label="Flag as waiting for reply" data-tip="Flag as waiting for reply — shows in the Flagged tab">🚩</button>
       <button class="expand-btn" aria-label="Expand" data-tip="Show more details">⋯</button>
     </div>

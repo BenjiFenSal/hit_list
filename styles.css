@@ -135,6 +135,11 @@ body {
   padding: 0;
 }
 
+.theme-toggle:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .tab-btn {
   border: none;
   background: none;
@@ -170,6 +175,12 @@ body {
 
 .quick-add input[type="text"] {
   flex: 1 1 200px;
+}
+
+.qa-idea-hint {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  font-style: italic;
 }
 
 .qa-description {
@@ -223,9 +234,13 @@ body {
   width: 100%;
   text-align: left;
   padding: 0.5rem 0.7rem;
+  padding-left: 0.55rem;
+  border-left: 3px solid var(--chip-color, transparent);
   font-size: 0.85rem;
   background: none;
-  border: none;
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
   color: var(--text);
   cursor: pointer;
 }
@@ -364,16 +379,53 @@ body {
   background: color-mix(in srgb, var(--accent) 6%, var(--surface));
 }
 
-.quadrant h2 {
-  font-size: 0.9rem;
-  margin: 0 0 0.6rem;
+.quadrant.collapsed {
+  min-height: 0;
+}
+
+.quadrant-heading-row {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  margin: 0 0 0.6rem;
+}
+
+.quadrant.collapsed .quadrant-heading-row {
+  margin-bottom: 0;
+}
+
+.quadrant-collapse-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 0.1rem 0.2rem;
+  flex-shrink: 0;
+}
+
+.quadrant h2 {
+  font-size: 0.9rem;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1;
+  min-width: 0;
 }
 
 .quadrant h2 .cat-icon {
   font-size: 1rem;
+}
+
+.quadrant-count-badge {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  flex-shrink: 0;
 }
 
 .quadrant[data-category="urgent-important"] { --dot-color: var(--urgent-important); }
@@ -386,6 +438,10 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+.quadrant-tasks[hidden] {
+  display: none;
 }
 
 .empty-hint {
@@ -465,8 +521,8 @@ body {
 .project-chip {
   display: inline-block;
   font-size: 0.7rem;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--chip-color, var(--accent));
+  background: color-mix(in srgb, var(--chip-color, var(--accent)) 14%, transparent);
   border-radius: 999px;
   padding: 0.1rem 0.5rem;
   margin-bottom: 0.35rem;
@@ -474,6 +530,15 @@ body {
 
 .project-chip[hidden] {
   display: none;
+}
+
+.project-dot {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  margin-right: 0.4rem;
+  vertical-align: middle;
 }
 
 .recent-projects {
@@ -522,6 +587,22 @@ body {
 }
 
 .flag-toggle-btn.flagged {
+  opacity: 1;
+  filter: none;
+}
+
+.in-progress-btn {
+  background: none;
+  border: none;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0 0.2rem;
+  opacity: 0.3;
+  filter: grayscale(1);
+  line-height: 1;
+}
+
+.in-progress-btn.in-progress {
   opacity: 1;
   filter: none;
 }
@@ -912,8 +993,38 @@ body {
   padding: 0.5rem 0.7rem;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.project-swatch {
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.project-swatch-palette {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.project-swatch-option {
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  padding: 0;
+}
+
+.project-swatch-option.selected {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
 }
 
 .project-row-name {
@@ -921,6 +1032,7 @@ body {
   flex-direction: column;
   gap: 0.1rem;
   min-width: 0;
+  flex: 1;
 }
 
 .project-row-name span:first-child {
@@ -936,8 +1048,19 @@ body {
 
 .project-row-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.4rem;
   flex-shrink: 0;
+}
+
+.project-move-select {
+  font-size: 0.75rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  max-width: 160px;
 }
 
 .project-row-actions button {
@@ -1037,6 +1160,26 @@ body {
   color: var(--text-dim);
   cursor: pointer;
   white-space: nowrap;
+}
+
+.idea-wrap .today-row .expand-btn {
+  margin-left: auto;
+}
+
+.idea-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  padding: 0.6rem 0.7rem;
+  margin-top: -1px;
+}
+
+.idea-details[hidden] {
+  display: none;
 }
 
 /* Analytics */
