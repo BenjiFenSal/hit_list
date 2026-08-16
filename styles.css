@@ -260,7 +260,7 @@ body {
 
 .quick-add input,
 .quick-add select,
-.quick-add > button {
+.quick-add-row > button[type="submit"] {
   font-size: 0.9rem;
   padding: 0.5rem 0.6rem;
   border-radius: 8px;
@@ -269,12 +269,20 @@ body {
   color: var(--text);
 }
 
-.quick-add > button {
+.quick-add-row > button[type="submit"] {
   background: var(--accent);
   color: white;
   border: none;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
+}
+
+.qa-add-start-btn {
+  background: var(--done) !important;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 
 .quick-toggle {

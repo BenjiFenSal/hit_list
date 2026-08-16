@@ -279,7 +279,7 @@ function toggleInProgress(task) {
   touchTask(task);
 }
 
-function addTask({ title, category, scheduledDate, projectId, comment, quickTask }) {
+function addTask({ title, category, scheduledDate, projectId, comment, quickTask, startNow }) {
   const task = {
     id: crypto.randomUUID(),
     title,
@@ -287,7 +287,7 @@ function addTask({ title, category, scheduledDate, projectId, comment, quickTask
     projectId: projectId || null,
     scheduledDate: scheduledDate || null,
     progress: 0,
-    startDate: null,
+    startDate: startNow ? todayStr() : null,
     multiDay: false,
     done: false,
     completedDate: null,
@@ -1745,8 +1745,9 @@ document.getElementById("quick-add").addEventListener("submit", (e) => {
   const isIdea = category === "idea-vault";
   const scheduledDate = isIdea ? null : document.getElementById("qa-date").value;
   if (!title || (!isIdea && !scheduledDate)) return;
+  const startNow = e.submitter && e.submitter.id === "qa-add-start";
   const project = resolveQuickAddProject();
-  addTask({ title, category, scheduledDate, projectId: project ? project.id : null, comment, quickTask: quickAddIsQuickTask });
+  addTask({ title, category, scheduledDate, projectId: project ? project.id : null, comment, quickTask: quickAddIsQuickTask, startNow });
   e.target.reset();
   quickAddProjectId = null;
   quickAddIsQuickTask = false;
