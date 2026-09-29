@@ -14,7 +14,23 @@ const SYNC_CONFIG = {
 };
 
 const SYNC_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
-const SYNC_SHEET_NAME = "HitListData";
+
+// One row per record (not one giant JSON blob per cell) — Sheets caps any
+// single cell at 50,000 characters, which a JSON dump of the whole task list
+// blows past once you've got a few dozen tasks with notes on them.
+const TASKS_TAB = "Tasks";
+const PROJECTS_TAB = "Projects";
+const CLEAR_ROWS = 20000;
+
+const TASK_FIELDS = [
+  "id", "title", "category", "projectId", "scheduledDate", "progress",
+  "startDate", "multiDay", "done", "completedDate", "followUp", "quickTask",
+  "extraMile", "comment", "createdAt", "updatedAt", "deleted",
+];
+const TASK_LAST_COL = "Q"; // one column per TASK_FIELDS entry, A.. — keep in sync with the list above
+
+const PROJECT_FIELDS = ["id", "name", "archived", "parentId", "color", "lastUsedAt", "updatedAt"];
+const PROJECT_LAST_COL = "G"; // one column per PROJECT_FIELDS entry, A.. — keep in sync with the list above
 
 // How long to keep deleted-task tombstones around before pruning them for good.
 // Needs to comfortably outlast "longest realistic gap between syncs on a device."
@@ -87,42 +103,105 @@ async function sheetsApi(path, options = {}) {
   return res.json();
 }
 
-async function ensureSyncSheetExists() {
+async function ensureSyncTabsExist() {
   const meta = await sheetsApi("?fields=sheets.properties.title");
-  const exists = meta.sheets.some((s) => s.properties.title === SYNC_SHEET_NAME);
-  if (!exists) {
+  const titles = meta.sheets.map((s) => s.properties.title);
+  const missing = [TASKS_TAB, PROJECTS_TAB].filter((t) => !titles.includes(t));
+  if (missing.length) {
     await sheetsApi(":batchUpdate", {
       method: "POST",
       body: JSON.stringify({
-        requests: [{ addSheet: { properties: { title: SYNC_SHEET_NAME } } }],
+        requests: missing.map((title) => ({ addSheet: { properties: { title } } })),
       }),
     });
   }
 }
 
-async function fetchRemoteData() {
-  const data = await sheetsApi(`/values/${encodeURIComponent(SYNC_SHEET_NAME + "!A1:B2")}`);
-  const rows = data.values || [];
-  const row = (label) => {
-    const r = rows.find((r) => r[0] === label);
-    return r ? r[1] : null;
-  };
+// --- Row <-> record conversion ---
+// Sheets returns UNFORMATTED_VALUE cells as real strings/numbers/booleans
+// already, so this is mostly just "fill in blanks safely," not string parsing.
+function cell(v) {
+  return v === null || v === undefined ? "" : v;
+}
+
+function taskToRow(t) {
+  return [
+    t.id, t.title, t.category, cell(t.projectId), cell(t.scheduledDate), t.progress || 0,
+    cell(t.startDate), !!t.multiDay, !!t.done, cell(t.completedDate), !!t.followUp, !!t.quickTask,
+    t.extraMile || "", t.comment || "", t.createdAt || "", t.updatedAt || 0, !!t.deleted,
+  ];
+}
+
+function rowToTask(row) {
+  const g = (i) => (row[i] === undefined || row[i] === "" ? null : row[i]);
   return {
-    tasks: JSON.parse(row("tasks") || "[]"),
-    projects: JSON.parse(row("projects") || "[]"),
+    id: row[0],
+    title: g(1) || "",
+    category: g(2),
+    projectId: g(3),
+    scheduledDate: g(4),
+    progress: Number(row[5]) || 0,
+    startDate: g(6),
+    multiDay: row[7] === true,
+    done: row[8] === true,
+    completedDate: g(9),
+    followUp: row[10] === true,
+    quickTask: row[11] === true,
+    extraMile: g(12) || "",
+    comment: g(13) || "",
+    createdAt: g(14) || "",
+    updatedAt: Number(row[15]) || 0,
+    deleted: row[16] === true,
+  };
+}
+
+function projectToRow(p) {
+  return [p.id, p.name, !!p.archived, cell(p.parentId), p.color || "", p.lastUsedAt || 0, p.updatedAt || 0];
+}
+
+function rowToProject(row) {
+  const g = (i) => (row[i] === undefined || row[i] === "" ? null : row[i]);
+  return {
+    id: row[0],
+    name: g(1) || "",
+    archived: row[2] === true,
+    parentId: g(3),
+    color: g(4) || "",
+    lastUsedAt: Number(row[5]) || 0,
+    updatedAt: Number(row[6]) || 0,
+  };
+}
+
+async function fetchRemoteData() {
+  const [taskData, projectData] = await Promise.all([
+    sheetsApi(`/values/${encodeURIComponent(`${TASKS_TAB}!A2:${TASK_LAST_COL}${CLEAR_ROWS}`)}?valueRenderOption=UNFORMATTED_VALUE`),
+    sheetsApi(`/values/${encodeURIComponent(`${PROJECTS_TAB}!A2:${PROJECT_LAST_COL}${CLEAR_ROWS}`)}?valueRenderOption=UNFORMATTED_VALUE`),
+  ]);
+  const taskRows = taskData.values || [];
+  const projectRows = projectData.values || [];
+  return {
+    tasks: taskRows.filter((r) => r[0]).map(rowToTask),
+    projects: projectRows.filter((r) => r[0]).map(rowToProject),
   };
 }
 
 async function writeRemoteData(mergedTasks, mergedProjects) {
-  await sheetsApi(`/values/${encodeURIComponent(SYNC_SHEET_NAME + "!A1:B2")}?valueInputOption=RAW`, {
-    method: "PUT",
-    body: JSON.stringify({
-      values: [
-        ["tasks", JSON.stringify(mergedTasks)],
-        ["projects", JSON.stringify(mergedProjects)],
-      ],
+  // Clear first so a shrinking dataset (deletions pruned, etc.) doesn't leave
+  // stale trailing rows behind from a previous, larger sync.
+  await Promise.all([
+    sheetsApi(`/values/${encodeURIComponent(`${TASKS_TAB}!A1:${TASK_LAST_COL}${CLEAR_ROWS}`)}:clear`, { method: "POST" }),
+    sheetsApi(`/values/${encodeURIComponent(`${PROJECTS_TAB}!A1:${PROJECT_LAST_COL}${CLEAR_ROWS}`)}:clear`, { method: "POST" }),
+  ]);
+  await Promise.all([
+    sheetsApi(`/values/${encodeURIComponent(`${TASKS_TAB}!A1`)}?valueInputOption=RAW`, {
+      method: "PUT",
+      body: JSON.stringify({ values: [TASK_FIELDS, ...mergedTasks.map(taskToRow)] }),
     }),
-  });
+    sheetsApi(`/values/${encodeURIComponent(`${PROJECTS_TAB}!A1`)}?valueInputOption=RAW`, {
+      method: "PUT",
+      body: JSON.stringify({ values: [PROJECT_FIELDS, ...mergedProjects.map(projectToRow)] }),
+    }),
+  ]);
 }
 
 // Per-record last-write-wins merge, keyed by id. A record present on only one
@@ -156,7 +235,7 @@ async function runSync() {
   try {
     await requestSyncToken();
     showSyncStatus("Syncing…");
-    await ensureSyncSheetExists();
+    await ensureSyncTabsExist();
 
     const remote = await fetchRemoteData();
 
